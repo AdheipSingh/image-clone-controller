@@ -24,6 +24,6 @@ spec:
         - name: "USERNAME"
           value: imageclonecontroller
         - name: "PASSWORD"
-          value: Pluto1222
+          value: 
         - name: "REGISTERY"
           value: docker.io/imageclonecontroller/backup-registery
