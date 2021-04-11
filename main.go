@@ -20,13 +20,18 @@ import (
 	"os"
 
 	ic "github.com/AdheipSingh/image-clone-controller/pkg"
+	appsv1 "k8s.io/api/apps/v1"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+
 	"github.com/AdheipSingh/image-clone-controller/utils"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 func init() {
@@ -35,13 +40,14 @@ func init() {
 
 func main() {
 	entryLog := log.Log.WithName("entrypoint")
+
 	ns, err := utils.GetWatchNamespace()
 	if err != nil {
 		os.Exit(1)
 	}
+
 	// Setup a Manager
 	entryLog.Info("setting up manager")
-
 	mgr, err := manager.New(config.GetConfigOrDie(), manager.Options{
 		Namespace: ns,
 	})
@@ -50,12 +56,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := ic.AddToManager(mgr); err != nil {
-		entryLog.Error(err, "")
-		os.Exit(1)
-	}
 	// Setup a new controller to reconcile ReplicaSets
 	entryLog.Info("Setting up controller")
+
+	c, err := controller.New("image-clone-controller", mgr, controller.Options{
+		Reconciler: &ic.ReconcileImageController{Client: mgr.GetClient()},
+	})
+	if err != nil {
+		entryLog.Error(err, "unable to set up individual controller")
+		os.Exit(1)
+	}
+
+	if err := c.Watch(&source.Kind{Type: &appsv1.Deployment{}}, &handler.EnqueueRequestForObject{}, ic.IgnoreNamespacePredicate()); err != nil {
+		entryLog.Error(err, "unable to watch Deployments")
+		os.Exit(1)
+	}
+
+	if err := c.Watch(&source.Kind{Type: &appsv1.DaemonSet{}}, &handler.EnqueueRequestForObject{}, ic.IgnoreNamespacePredicate()); err != nil {
+		entryLog.Error(err, "unable to watch Daemonset")
+		os.Exit(1)
+	}
 
 	entryLog.Info("starting manager")
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {

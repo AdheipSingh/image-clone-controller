@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-control-controller
+  namespace: nginx
+spec:
+  selector:
+    matchLabels:
+      app: ic
+  replicas: 1 
+  template:
+    metadata:
+      labels:
+        app: ic
+    spec:
+      serviceAccountName: ic
+      containers:
+      - name: ic
+        image: imageclonecontroller/controller:v3
+        command: ["./controller"]
+        env:
+        - name: "WATCH_NAMESPACE"
+          value: nginx
+        - name: "USERNAME"
+          value: imageclonecontroller
+        - name: "PASSWORD"
+          value: Pluto1222
+        - name: "REGISTERY"
+          value: docker.io/imageclonecontroller/backup-registery

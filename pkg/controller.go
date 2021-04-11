@@ -16,58 +16,11 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
-func init() {
-	// AddToManagerFuncs is a list of functions to create controllers and add them to a manager.
-	AddToManagerFuncs = append(AddToManagerFuncs, Add)
-}
-
-func Add(mgr manager.Manager) error {
-	return add(mgr, newReconciler(mgr))
-}
-
-func newReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileImageController{Client: mgr.GetClient()}
-}
-
-func add(mgr manager.Manager, r reconcile.Reconciler) error {
-	c, err := controller.New("image-clone-controller", mgr, controller.Options{
-		Reconciler: &ReconcileImageController{Client: mgr.GetClient()},
-	})
-	if err != nil {
-		return err
-	}
-
-	if err := c.Watch(&source.Kind{Type: &appsv1.Deployment{}}, &handler.EnqueueRequestForObject{}, IgnoreNamespacePredicate()); err != nil {
-		return err
-	}
-
-	if err := c.Watch(&source.Kind{Type: &appsv1.DaemonSet{}}, &handler.EnqueueRequestForObject{}, IgnoreNamespacePredicate()); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// AddToManagerFuncs is a list of functions to add all Controllers to the Manager
-var AddToManagerFuncs []func(manager.Manager) error
-
-// AddToManager adds all Controllers to the Manager
-func AddToManager(m manager.Manager) error {
-	for _, f := range AddToManagerFuncs {
-		if err := f(m); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+var Auth = authn.Basic{Username: os.Getenv("USERNAME"), Password: os.Getenv("PASSWORD")}
 
 // reconcileImageController reconciles reconcileImageController
 type ReconcileImageController struct {
@@ -78,6 +31,10 @@ var _ reconcile.Reconciler = &ReconcileImageController{}
 
 func (r *ReconcileImageController) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
 	log := log.FromContext(ctx)
+
+	if request.Namespace == "kube-system" {
+		return reconcile.Result{Requeue: false}, nil
+	}
 
 	//----------------------------------- MAKE DEPLOYMENT LIST --------------------------------------
 	deploymentListEmptyObject := &appsv1.DeploymentList{}
@@ -113,29 +70,60 @@ func (r *ReconcileImageController) Reconcile(ctx context.Context, request reconc
 		return reconcile.Result{}, nil
 	}
 
-	fmt.Println(images)
 	for i := range deploymentList {
-		if deploymentList[i].Annotations["backup"] == "true" {
+		// dont do anything on controller
+		if deploymentList[i].Name == "image-control-controller" {
 			return reconcile.Result{}, nil
 		} else {
-			if !utils.ContainsString(images, strings.Replace(deploymentList[i].Spec.Template.Spec.Containers[i].Image, ":", "", -1)) {
-				log.Info("Image does not exist, in backupregistery, taking backup of registery", "imageName", deploymentList[i].Spec.Template.Spec.Containers[i].Image)
-				tag, err := pullObjectImageTagandPush(deploymentList[i].Spec.Template.Spec.Containers[i].Image)
+			fmt.Println("aaaa")
+			if deploymentList[i].Annotations["backup"] != "true" {
+
+				if !utils.ContainsString(images, strings.Replace(deploymentList[i].Spec.Template.Spec.Containers[i].Image, ":", "", -1)) {
+					log.Info("Image does not exist, in backupregistery, taking backup of registery", "imageName", deploymentList[i].Spec.Template.Spec.Containers[i].Image)
+					tag, err := pullObjectImageTagandPush(deploymentList[i].Spec.Template.Spec.Containers[i].Image)
+					if err != nil {
+						log.Error(err, err.Error())
+						return reconcile.Result{}, nil
+					}
+					patch := client.MergeFrom(deploymentList[i].DeepCopy())
+					deploymentList[i].Annotations = map[string]string{
+						"backup": "true",
+					}
+					deploymentList[i].Spec.Template.Spec.Containers[i].Image = tag
+					err = r.Client.Patch(context.TODO(), deploymentList[i], patch)
+					if err != nil {
+						log.Error(err, err.Error())
+						return reconcile.Result{}, nil
+					} else {
+						log.Info("Patched Success", "deployment", deploymentList[i].Name)
+					}
+				}
+			}
+		}
+
+	}
+
+	for i := range daemonList {
+		if daemonList[i].Annotations["backup"] != "true" {
+
+			if !utils.ContainsString(images, strings.Replace(daemonList[i].Spec.Template.Spec.Containers[i].Image, ":", "", -1)) {
+				log.Info("Image does not exist, in backupregistery, taking backup of registery", "imageName", daemonList[i].Spec.Template.Spec.Containers[i].Image)
+				tag, err := pullObjectImageTagandPush(daemonList[i].Spec.Template.Spec.Containers[i].Image)
 				if err != nil {
 					log.Error(err, err.Error())
 					return reconcile.Result{}, nil
 				}
-				patch := client.MergeFrom(deploymentList[i].DeepCopy())
-				deploymentList[i].Annotations = map[string]string{
+				patch := client.MergeFrom(daemonList[i].DeepCopy())
+				daemonList[i].Annotations = map[string]string{
 					"backup": "true",
 				}
-				deploymentList[i].Spec.Template.Spec.Containers[i].Image = tag
-				err = r.Client.Patch(context.TODO(), deploymentList[i], patch)
+				daemonList[i].Spec.Template.Spec.Containers[i].Image = tag
+				err = r.Client.Patch(context.TODO(), daemonList[i], patch)
 				if err != nil {
 					log.Error(err, err.Error())
 					return reconcile.Result{}, nil
 				} else {
-					log.Info("Patched Success", "deployment", deploymentList[i].Name)
+					log.Info("Patched Success", "daemonset", daemonList[i].Name)
 				}
 			}
 		}
@@ -147,14 +135,12 @@ func (r *ReconcileImageController) Reconcile(ctx context.Context, request reconc
 
 func getImageFromBackUpRegistery() ([]string, error) {
 
-	ref, err := name.NewRepository("docker.io/imageclonecontroller/backup-registery")
+	ref, err := name.NewRepository(os.Getenv("REGISTERY"))
 	if err != nil {
 		return nil, err
 	}
 
-	var a = authn.Basic{Username: os.Getenv("USERNAME"), Password: os.Getenv("PASSWORD")}
-	// Fetch the manifest using default credentials.
-	img, err := remote.List(ref, remote.WithAuth(&a))
+	img, err := remote.List(ref, remote.WithAuth(&Auth))
 	if err != nil {
 		return nil, err
 	}
@@ -164,21 +150,20 @@ func getImageFromBackUpRegistery() ([]string, error) {
 }
 
 func pullObjectImageTagandPush(imageName string) (newImageName string, err error) {
-	var a = authn.Basic{Username: os.Getenv("USERNAME"), Password: os.Getenv("PASSWORD")}
 
-	image, err := crane.Pull(imageName, crane.WithAuth(&a))
+	image, err := crane.Pull(imageName, crane.WithAuth(&Auth))
 	if err != nil {
 		return "", err
 	}
 
 	igN := strings.Replace(imageName, ":", "", -1)
-	tag, err := name.NewTag("docker.io/imageclonecontroller/backup-registery:" + igN)
+	tag, err := name.NewTag(os.Getenv("REGISTERY") + igN)
 	if err != nil {
 		return "", err
 	}
 
 	//	fmt.Println(tag.String())
-	if err := crane.Push(image, tag.String(), crane.WithAuth(&a)); err != nil {
+	if err := crane.Push(image, tag.String(), crane.WithAuth(&Auth)); err != nil {
 		return "", err
 	}
 
