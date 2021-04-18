@@ -1,4 +1,4 @@
-## fuck this. Controller, utter time waste water fuck kubermatic
+
 # image-clone-controller
 
 - Based on controller-runtime.
